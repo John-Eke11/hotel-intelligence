@@ -1,3 +1,8 @@
+"""
+This module defines the data models for the API using Pydantic.
+The QueryRequest model represents the structure of the incoming request,
+while the QueryResponse model defines the structure of the response sent back to the client.
+"""
 from pydantic import BaseModel, Field
 from typing import Optional
 
