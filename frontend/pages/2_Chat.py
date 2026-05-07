@@ -117,8 +117,8 @@ def _handle_query(query: str) -> None:
             return
 
         content = {
-            "summary": response.get("summary", "Query completed."),
-            "sql": response.get("sql"),
+            "summary": response.get("answer", "Query completed."),
+            "sql": response.get("generated_sql"),
             "data": response.get("data"),
         }
 

@@ -19,7 +19,7 @@ class APIClient:
 
     def __init__(self, base_url: Optional[str] = None) -> None:
         self.base_url = (
-            base_url or os.getenv("API_BASE_URL", "http://localhost:8000")
+            base_url or os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
         ).rstrip("/")
         self._session = requests.Session()
 
@@ -157,4 +157,4 @@ class APIClient:
                 }
             }
         """
-        return self._post("/chat", {"query": query, "property_id": property_id})
+        return self._post("/api/query", {"user_prompt": query, "property_id": property_id})

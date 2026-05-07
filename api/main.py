@@ -68,7 +68,7 @@ def process_and_cache_query(user_prompt: str, property_id: int):
         
         # Get final formatted text from LLM
         # final_answer = generate_natural_answer(user_prompt, raw_results)
-        final_answer = f"I found {len(raw_results)} results." # Mock
+        final_answer = f"This is a mock query. I found {len(raw_results)} results." # Mock
         
         return final_answer, sql_query
         
@@ -99,3 +99,8 @@ def process_revenue_query(request: QueryRequest):
             answer="An error occurred while processing the request.",
             error=str(e)
         )
+
+@app.get("/health")
+def health_check():
+    """Lets the frontend know the server is awake."""
+    return {"status": "ok"}
