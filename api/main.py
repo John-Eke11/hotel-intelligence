@@ -85,14 +85,14 @@ def _kpis_for_period(from_d: date, to_d: date, property_id: int) -> dict:
         SELECT
             p.total_rooms,
             COALESCE(SUM(r.length_of_stay), 0)::float AS nights_sold,
-            COALESCE(SUM(r.room_revenue),   0)::float AS room_revenue,
+            COALESCE(SUM(r.total_room_revenue),   0)::float AS room_revenue,
             COALESCE(SUM(r.total_revenue),  0)::float AS stay_revenue
         FROM property p
         LEFT JOIN reservations r
-               ON r.property_id = p.id
+               ON r.property_id = p.property_id
               AND r.check_in_date BETWEEN %s AND %s
               AND r.booking_status NOT IN ('cancelled', 'no_show')
-        WHERE p.id = %s
+        WHERE p.property_id = %s
         GROUP BY p.total_rooms
     """
     row = fetch_one(stay_sql, (from_d, to_d, property_id))
@@ -223,7 +223,7 @@ def get_monthly_trend(
                  + bt.target_spa_revenue
                 )::float AS target_revenue
             FROM budget_targets bt
-            JOIN property p ON p.id = bt.property_id
+            JOIN property p ON p.property_id = bt.property_id
             WHERE bt.property_id = %s
         )
         SELECT
