@@ -48,14 +48,10 @@ st.caption(
 # ── Suggested questions (shown only when chat is empty) ───────────────────────
 
 SUGGESTED_QUESTIONS = [
-    "What was our occupancy last month?",
-    "Which channel brought the most revenue this quarter?",
-    "How did we price against competitors during Iron Man Cascais?",
-    "Are we on track to hit our budget this month?",
-    "What is the average stay length for corporate guests?",
-    "How much revenue came from events last month?",
-    "What is our RevPAR trend year-over-year?",
-    "Which room type performs best during events?",
+    "How did we price against competitors during Iron Man Cascais 2025?",
+    "How was our channel performance last month compared to same time last year?"
+    "What is the average stay length for corporate guests this year?",
+    "Explain the hospitality industry to me like I am 5."
 ]
 
 if not st.session_state.chat_history:
