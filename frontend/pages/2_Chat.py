@@ -103,7 +103,7 @@ def _handle_query(query: str) -> None:
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
-            response = client.chat(query)
+            response = client.chat(query, messages=st.session_state.chat_history)
 
         if response is None:
             summary = (

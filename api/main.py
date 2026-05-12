@@ -13,7 +13,11 @@ POST /chat                         NL query → SQL → tabular results (LLM moc
 POST /api/query                    legacy NL endpoint with LRU cache (LLM mocked)
 """
 
+import json
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import date, timedelta
 from functools import lru_cache
 from typing import Optional
@@ -26,7 +30,12 @@ from dotenv import load_dotenv
 
 from models import ChatRequest, ChatResponse, QueryRequest, QueryResponse
 
-# from llm.agent import generate_sql_from_text, generate_natural_answer
+from llm.agent import (
+    generate_sql_from_text,
+    generate_natural_answer,
+    generate_sql_or_answer,
+    generate_contextual_answer,
+)
 
 load_dotenv()
 
@@ -52,6 +61,10 @@ def fetch_all(sql: str, params: tuple) -> list[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # psycopg2 treats % as a parameter placeholder — escape any literal
+            # % in LLM-generated SQL (e.g. ILIKE '%value%') when no params are used.
+            if not params:
+                sql = sql.replace("%", "%%")
             cur.execute(sql, params)
             return [dict(row) for row in cur.fetchall()]
     finally:
@@ -260,31 +273,63 @@ def get_events(
     return fetch_all(sql, (to_date, from_date))
 
 
-# ── Chat (NL-to-SQL — LLM mocked until llm/agent.py is wired) ────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _serialize_history(raw_messages: list) -> list[dict]:
+    """Convert frontend chat history to Ollama-compatible {role, content} strings."""
+    result = []
+    for msg in raw_messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if isinstance(content, dict):
+            text = content.get("summary", "")
+            data = content.get("data")
+            if data and data.get("rows"):
+                n = len(data["rows"])
+                cols = data.get("columns", [])
+                sample = [dict(zip(cols, r)) for r in data["rows"][:5]]
+                text += (
+                    f"\n[Query returned {n} rows. "
+                    f"Sample: {json.dumps(sample, default=str)}]"
+                )
+        else:
+            text = str(content)
+        result.append({"role": role, "content": text})
+    return result
+
+
+# ── Chat ──────────────────────────────────────────────────────────────────────
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
-    # TODO: replace mock with generate_sql_from_text + generate_natural_answer
-    mock_sql = (
-        "SELECT booking_channel, SUM(total_revenue)::float AS total_revenue "
-        "FROM reservations "
-        "WHERE property_id = 1 "
-        "  AND booking_status NOT IN ('cancelled', 'no_show') "
-        "GROUP BY booking_channel "
-        "ORDER BY total_revenue DESC;"
-    )
-    rows_raw = fetch_all(mock_sql, ())
-    columns  = list(rows_raw[0].keys()) if rows_raw else []
-    rows     = [[row[c] for c in columns] for row in rows_raw]
+    try:
+        history = _serialize_history(request.messages)
+        history.append({"role": "user", "content": request.query})
 
-    return ChatResponse(
-        summary=(
-            f'The LLM backend is not yet connected. '
-            f'Showing a mock result for: "{request.query}"'
-        ),
-        sql=mock_sql,
-        data={"columns": columns, "rows": rows},
-    )
+        content, is_sql = generate_sql_or_answer(history, request.property_id)
+
+        if not is_sql:
+            return ChatResponse(summary=content, sql=None, data=None)
+
+        if not content.strip().upper().startswith(("SELECT", "WITH")):
+            raise ValueError("Only SELECT queries are permitted.")
+
+        rows_raw = fetch_all(content, ())
+        columns  = list(rows_raw[0].keys()) if rows_raw else []
+        rows     = [[row[c] for c in columns] for row in rows_raw]
+        summary  = generate_contextual_answer(history, rows_raw)
+
+        return ChatResponse(
+            summary=summary,
+            sql=content,
+            data={"columns": columns, "rows": rows},
+        )
+    except Exception as e:
+        return ChatResponse(
+            summary=f"Sorry, I couldn't process that query: {e}",
+            sql=None,
+            data=None,
+        )
 
 
 # ── Legacy NL query endpoint (kept from API branch) ───────────────────────────
@@ -293,16 +338,13 @@ def chat(request: ChatRequest):
 # This saves LLM compute and database round-trips once the LLM is wired.
 @lru_cache(maxsize=100)
 def process_and_cache_query(user_prompt: str, property_id: int):
-    # TODO: sql_query = generate_sql_from_text(user_prompt, property_id)
-    sql_query = "SELECT * FROM reservations LIMIT 5;"
+    sql_query = generate_sql_from_text(user_prompt, property_id)
 
-    if not sql_query.strip().upper().startswith("SELECT"):
+    if not sql_query.strip().upper().startswith(("SELECT", "WITH")):
         raise ValueError("Security block: Only SELECT queries are permitted.")
 
     raw_results = fetch_all(sql_query, ())
-
-    # TODO: final_answer = generate_natural_answer(user_prompt, raw_results)
-    final_answer = f"I found {len(raw_results)} results."
+    final_answer = generate_natural_answer(user_prompt, raw_results)
 
     return final_answer, sql_query
 

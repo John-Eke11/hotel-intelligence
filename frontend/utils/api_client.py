@@ -28,7 +28,7 @@ class APIClient:
     def _get(self, path: str, params: Optional[dict] = None) -> Optional[dict | list]:
         try:
             resp = self._session.get(
-                f"{self.base_url}{path}", params=params, timeout=10
+                f"{self.base_url}{path}", params=params, timeout=100
             )
             resp.raise_for_status()
             return resp.json()
@@ -38,7 +38,7 @@ class APIClient:
     def _post(self, path: str, payload: dict) -> Optional[dict]:
         try:
             resp = self._session.post(
-                f"{self.base_url}{path}", json=payload, timeout=30
+                f"{self.base_url}{path}", json=payload, timeout=300
             )
             resp.raise_for_status()
             return resp.json()
@@ -144,7 +144,7 @@ class APIClient:
 
     # ── Chat / NL-to-SQL ─────────────────────────────────────────────────────
 
-    def chat(self, query: str, property_id: int = 1) -> Optional[dict]:
+    def chat(self, query: str, property_id: int = 1, messages: list = None) -> Optional[dict]:
         """Send a natural language query; return SQL + tabular results.
 
         Expected response shape:
@@ -157,4 +157,8 @@ class APIClient:
                 }
             }
         """
-        return self._post("/chat", {"query": query, "property_id": property_id})
+        return self._post("/chat", {
+            "query": query,
+            "property_id": property_id,
+            "messages": messages or [],
+        })
