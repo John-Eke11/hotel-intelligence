@@ -48,8 +48,8 @@ st.caption(
 # ── Suggested questions (shown only when chat is empty) ───────────────────────
 
 SUGGESTED_QUESTIONS = [
-    "How did we price against competitors during Iron Man Cascais 2025?",
-    "How was our channel performance last month compared to same time last year?"
+    "How did we price against competitors during Ironman Cascais 2025?",
+    "How was our channel performance last month compared to same time last year?",
     "What is the average stay length for corporate guests this year?",
     "Explain the hospitality industry to me like I am 5."
 ]
