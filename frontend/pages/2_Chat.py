@@ -54,7 +54,7 @@ SUGGESTED_QUESTIONS = [
     "Explain the hospitality industry to me like I am 5."
 ]
 
-if not st.session_state.chat_history:
+if not st.session_state.chat_history and not hasattr(st.session_state, "_pending_query"):
     st.markdown("**Suggested questions — click to ask:**")
     col_a, col_b = st.columns(2)
     for i, question in enumerate(SUGGESTED_QUESTIONS):
