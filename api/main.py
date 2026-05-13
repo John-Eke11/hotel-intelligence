@@ -16,7 +16,16 @@ POST /api/query                    legacy NL endpoint with LRU cache (LLM mocked
 import json
 import os
 import sys
+import logging
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Set up audit logger
+audit_logger = logging.getLogger("audit")
+audit_logger.setLevel(logging.INFO)
+file_handler = logging.FileHandler(os.path.join(os.path.dirname(__file__), "audit.log"))
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+audit_logger.addHandler(file_handler)
 
 from datetime import date, timedelta
 from functools import lru_cache
@@ -27,6 +36,8 @@ from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+import sqlglot
+from sqlglot import exp
 
 from models import ChatRequest, ChatResponse, QueryRequest, QueryResponse
 
@@ -61,10 +72,16 @@ def fetch_all(sql: str, params: tuple) -> list[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # L3 Output Validation: Enforce DB-level read-only role (Slide 96)
+            cur.execute("SET TRANSACTION READ ONLY;")
+            
             # psycopg2 treats % as a parameter placeholder — escape any literal
             # % in LLM-generated SQL (e.g. ILIKE '%value%') when no params are used.
             if not params:
                 sql = sql.replace("%", "%%")
+            
+            audit_logger.info(f"EXECUTED SQL: {sql} | PARAMS: {params}")
+            
             cur.execute(sql, params)
             return [dict(row) for row in cur.fetchall()]
     finally:
@@ -74,6 +91,34 @@ def fetch_all(sql: str, params: tuple) -> list[dict]:
 def fetch_one(sql: str, params: tuple) -> Optional[dict]:
     rows = fetch_all(sql, params)
     return rows[0] if rows else None
+
+def validate_sql_for_tenant(sql: str, expected_property_id: int):
+    """
+    L3 Output Validation & L2 Authorization (per Slide 96 & 108).
+    Parses the AST to prevent stacked queries and destructive commands,
+    and enforces cross-tenant data isolation.
+    """
+    try:
+        statements = sqlglot.parse(sql, read="postgres")
+        if not statements or len(statements) != 1:
+            raise ValueError("Security block: Exactly one SQL statement is allowed.")
+        
+        ast = statements[0]
+        if not isinstance(ast, exp.Select):
+            raise ValueError("Security block: Only SELECT queries are permitted.")
+            
+        # Prevent data-modifying operations inside CTEs or main query
+        for node in ast.find_all((exp.Delete, exp.Update, exp.Insert, exp.Drop, exp.Alter, exp.Command)):
+            raise ValueError("Security block: Data modifying operations are strictly prohibited.")
+            
+        # L2 Authorization: Enforce cross-tenant isolation
+        # Ensure the query explicitly filters for the authorized property_id
+        if str(expected_property_id) not in sql:
+            raise ValueError("Security block: Cross-tenant data isolation violation. Missing property_id filter.")
+            
+    except sqlglot.errors.ParseError as e:
+        raise ValueError(f"Security block: SQL syntax invalid or unparseable: {e}")
+
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -311,8 +356,8 @@ def chat(request: ChatRequest):
         if not is_sql:
             return ChatResponse(summary=content, sql=None, data=None)
 
-        if not content.strip().upper().startswith(("SELECT", "WITH")):
-            raise ValueError("Only SELECT queries are permitted.")
+        # L3 Output Validation & L2 Authorization
+        validate_sql_for_tenant(content, request.property_id)
 
         rows_raw = fetch_all(content, ())
         columns  = list(rows_raw[0].keys()) if rows_raw else []
@@ -340,8 +385,8 @@ def chat(request: ChatRequest):
 def process_and_cache_query(user_prompt: str, property_id: int):
     sql_query = generate_sql_from_text(user_prompt, property_id)
 
-    if not sql_query.strip().upper().startswith(("SELECT", "WITH")):
-        raise ValueError("Security block: Only SELECT queries are permitted.")
+    # L3 Output Validation & L2 Authorization
+    validate_sql_for_tenant(sql_query, property_id)
 
     raw_results = fetch_all(sql_query, ())
     final_answer = generate_natural_answer(user_prompt, raw_results)

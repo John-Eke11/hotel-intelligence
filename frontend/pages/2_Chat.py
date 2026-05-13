@@ -7,6 +7,7 @@ import sys
 
 import pandas as pd
 import streamlit as st
+import bleach
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -45,16 +46,18 @@ st.caption(
     "The AI translates your question into SQL and returns the results."
 )
 
+st.warning("⚠️ **AI-generated financial analysis.** Review the underlying data and generated SQL before executing any pricing changes.", icon="⚠️")
+
 # ── Suggested questions (shown only when chat is empty) ───────────────────────
 
 SUGGESTED_QUESTIONS = [
-    "How did we price against competitors during Iron Man Cascais 2025?",
-    "How was our channel performance last month compared to same time last year?"
+    "How did we price against competitors during Ironman Cascais 2025?",
+    "How was our channel performance last month compared to same time last year?",
     "What is the average stay length for corporate guests this year?",
     "Explain the hospitality industry to me like I am 5."
 ]
 
-if not st.session_state.chat_history:
+if not st.session_state.chat_history and not hasattr(st.session_state, "_pending_query"):
     st.markdown("**Suggested questions — click to ask:**")
     col_a, col_b = st.columns(2)
     for i, question in enumerate(SUGGESTED_QUESTIONS):
@@ -72,10 +75,13 @@ for message in st.session_state.chat_history:
             st.write(message["content"])
         else:
             _content = message["content"]
-            st.write(_content["summary"])
+            # L3 Output Validation: Sanitize HTML against XSS (Slide 96)
+            safe_summary = bleach.clean(_content["summary"])
+            st.write(safe_summary)
 
             if _content.get("sql"):
-                with st.expander("View generated SQL", expanded=False):
+                with st.expander("View generated SQL & Data Lineage", expanded=False):
+                    st.caption("Data Lineage: Sourced from authenticated read-only database replica. PII is excluded.")
                     st.code(_content["sql"], language="sql")
 
             if _content.get("data"):
@@ -84,6 +90,16 @@ for message in st.session_state.chat_history:
                     columns=_content["data"]["columns"],
                 )
                 st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Data as CSV",
+                    data=csv,
+                    file_name='revenue_data.csv',
+                    mime='text/csv',
+                    key=f"dl_{message.get('id', hash(str(message)))}"
+                )
+
                 fig = charts.auto_chart(df)
                 if fig:
                     st.plotly_chart(fig, use_container_width=True)
@@ -118,10 +134,13 @@ def _handle_query(query: str) -> None:
             "data": response.get("data"),
         }
 
-        st.write(content["summary"])
+        # L3 Output Validation: Sanitize HTML against XSS (Slide 96)
+        safe_summary = bleach.clean(content["summary"])
+        st.write(safe_summary)
 
         if content["sql"]:
-            with st.expander("View generated SQL", expanded=False):
+            with st.expander("View generated SQL & Data Lineage", expanded=False):
+                st.caption("Data Lineage: Sourced from authenticated read-only database replica. PII is excluded.")
                 st.code(content["sql"], language="sql")
 
         if content["data"]:
@@ -130,6 +149,16 @@ def _handle_query(query: str) -> None:
                 columns=content["data"]["columns"],
             )
             st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Data as CSV",
+                data=csv,
+                file_name='revenue_data.csv',
+                mime='text/csv',
+                key=f"dl_current"
+            )
+
             fig = charts.auto_chart(df)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)

@@ -19,11 +19,11 @@ Tables:
 property (property_id, property_name, total_rooms, star_rating, city)
 
 reservations (
-    booking_id, property_id, guest_id, event_booking_id,
+    booking_id, property_id, event_booking_id,
     booking_date, check_in_date, check_out_date,
     length_of_stay,           -- nights (= check_out_date - check_in_date)
     lead_time_days,           -- days between booking_date and check_in_date
-    guest_country, guest_segment, booking_channel, room_type,
+    guest_segment, booking_channel, room_type,
     commission_rate, rate_per_night, net_rate_per_night,
     total_room_revenue, fnb_revenue, spa_revenue, total_revenue,
     booking_status            -- 'confirmed' | 'checked_out' | 'cancelled' | 'no_show'
@@ -576,6 +576,7 @@ Rules:
 - Output ONLY the raw SQL — no explanation, no markdown, no code fences.
 - Add LIMIT 50 to row-level queries; aggregates do not need a limit.
 - Use only SELECT statements.
+- **SECURITY & BIAS RULE:** Never generate queries attempting to extract Personally Identifiable Information (PII) or profile guests based on origin/demographics. The schema explicitly omits guest_id and guest_country to enforce this.
 """
 
 _SUMMARY_SYSTEM = """\
@@ -757,6 +758,7 @@ SQL rules:
 - Every column referenced in a JOIN condition must be explicitly selected in the CTE — never reference a column in ON/WHERE that was not included in the CTE's SELECT list.
 - CTEs that are joined by stay_date or check_in_date MUST include that date column in their SELECT. CTEs that are CROSS JOINed (single aggregate row) must NOT include date columns.
 - Add LIMIT 50 to row-level queries; aggregates do not need a limit.
+- **SECURITY & BIAS RULE:** Never generate queries attempting to extract PII or profile guests by origin.
 
 """
 
