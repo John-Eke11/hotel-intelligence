@@ -38,7 +38,13 @@ def revenue_by_channel_chart(data: list[dict]) -> go.Figure:
         margin=dict(l=0, r=16, t=8, b=0),
         height=280,
         xaxis_tickprefix="€",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="sans-serif", color="#1C2B3A"),
+        xaxis=dict(gridcolor="#E8EDF2", gridwidth=1, showline=False, zeroline=False),
+        yaxis=dict(showgrid=False, showline=False),
     )
+    fig.update_traces(textfont_size=11, textfont_color="#1C2B3A")
     return fig
 
 
@@ -52,41 +58,74 @@ def revenue_by_segment_chart(data: list[dict]) -> go.Figure:
         hole=0.48,
         color_discrete_sequence=_SEGMENT_COLORS,
     )
-    fig.update_traces(textposition="outside", textinfo="percent+label")
+    fig.update_traces(
+        textposition="inside",
+        textinfo="percent+label",
+        insidetextorientation="horizontal",
+        textfont_size=12,
+    )
     fig.update_layout(
         showlegend=False,
         margin=dict(l=0, r=0, t=8, b=8),
         height=280,
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="sans-serif", color="#1C2B3A"),
     )
     return fig
 
 
 def monthly_trend_chart(data: list[dict]) -> go.Figure:
-    """Line chart comparing actual vs target (budget) revenue by month."""
+    """Line chart comparing actual vs target (budget) revenue by month.
+
+    Green fill where actual exceeds budget; red fill where actual falls short.
+    """
     df = pd.DataFrame(data)
     df["month"] = pd.to_datetime(df["month"])
 
+    x = df["month"].tolist()
+    actual = df["actual_revenue"].tolist()
+    budget = df["target_revenue"].tolist()
+
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=df["month"],
-            y=df["actual_revenue"],
-            name="Actual",
-            mode="lines+markers",
-            line=dict(color=_BLUE, width=2.5),
-            marker=dict(size=6),
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=df["month"],
-            y=df["target_revenue"],
-            name="Budget",
-            mode="lines+markers",
-            line=dict(color=_ORANGE, width=2, dash="dash"),
-            marker=dict(size=6),
-        )
-    )
+
+    # Green fill: budget baseline → actual (only where actual >= budget)
+    fig.add_trace(go.Scatter(
+        x=x, y=budget,
+        line=dict(width=0), showlegend=False, hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=[max(a, b) for a, b in zip(actual, budget)],
+        fill="tonexty", fillcolor="rgba(39,174,96,0.18)",
+        line=dict(width=0), showlegend=False, hoverinfo="skip",
+    ))
+
+    # Red fill: actual baseline → budget (only where actual < budget)
+    fig.add_trace(go.Scatter(
+        x=x, y=[min(a, b) for a, b in zip(actual, budget)],
+        line=dict(width=0), showlegend=False, hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=budget,
+        fill="tonexty", fillcolor="rgba(231,76,60,0.18)",
+        line=dict(width=0), showlegend=False, hoverinfo="skip",
+    ))
+
+    # Lines drawn on top of the fills
+    fig.add_trace(go.Scatter(
+        x=x, y=actual,
+        name="Actual",
+        mode="lines+markers",
+        line=dict(color=_BLUE, width=2.5),
+        marker=dict(size=6),
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=budget,
+        name="Budget",
+        mode="lines+markers",
+        line=dict(color=_ORANGE, width=2, dash="dash"),
+        marker=dict(size=6),
+    ))
+
     fig.update_layout(
         xaxis_title=None,
         yaxis_title="Revenue (€)",
@@ -94,6 +133,11 @@ def monthly_trend_chart(data: list[dict]) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=0, r=0, t=32, b=0),
         height=300,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="sans-serif", color="#1C2B3A"),
+        xaxis=dict(gridcolor="#E8EDF2", gridwidth=1, showline=False, zeroline=False),
+        yaxis=dict(gridcolor="#E8EDF2", gridwidth=1, showline=False, zeroline=False),
     )
     return fig
 

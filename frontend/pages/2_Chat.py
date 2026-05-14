@@ -39,7 +39,7 @@ with st.sidebar:
 
 # ── Page header ───────────────────────────────────────────────────────────────
 
-st.title("💬 Revenue Chat")
+st.title("Revenue Chat")
 st.caption(
     "Ask questions about revenue, occupancy, competitors, or budget in plain English. "
     "The AI translates your question into SQL and returns the results."

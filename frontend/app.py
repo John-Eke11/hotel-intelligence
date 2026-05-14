@@ -34,7 +34,7 @@ if "chat_history" not in st.session_state:
 
 # ── Page content ──────────────────────────────────────────────────────────────
 
-st.title("🏨 Hotel Revenue Intelligence")
+st.title("Hotel Revenue Intelligence")
 st.caption("AI-driven revenue analysis for independent hotels · Prototype · Synthetic data")
 
 backend_ok = st.session_state.api_client.health()
@@ -56,7 +56,7 @@ col1, col2 = st.columns(2)
 with col1:
     st.markdown(
         """
-        ### 📊 Dashboard
+        ### Dashboard
         Live KPI metrics, revenue breakdowns by channel and segment,
         actual vs budget variance, and an events calendar for the selected period.
         """
@@ -65,7 +65,7 @@ with col1:
 with col2:
     st.markdown(
         """
-        ### 💬 Chat
+        ### Chat
         Ask revenue questions in plain English. The AI translates your question
         into SQL, runs it against the database, and returns a summary with
         the underlying data and an auto-generated chart.
