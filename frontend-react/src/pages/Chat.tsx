@@ -1,12 +1,11 @@
 import { useRef, useEffect } from 'react'
 import { useChat } from '../hooks/useChat'
-import ChatMessage from '../components/chat/ChatMessage'
+import ChatMessage, { AssistantAvatar } from '../components/chat/ChatMessage'
 import ChatInput from '../components/chat/ChatInput'
 import SuggestedQuestions from '../components/chat/SuggestedQuestions'
-import Button from '../components/ui/Button'
 
 export default function Chat() {
-  const { chatHistory, sendMessage, clearHistory, loading } = useChat()
+  const { chatHistory, sendMessage, loading } = useChat()
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -15,16 +14,8 @@ export default function Chat() {
 
   return (
     <div className="flex gap-6 h-full" style={{ minHeight: 'calc(100vh - 128px)' }}>
-      {/* Left panel */}
-      <div
-        className="flex-shrink-0 flex flex-col gap-4 py-2"
-        style={{ width: 260 }}
-      >
-        {chatHistory.length > 0 && (
-          <Button variant="ghost" onClick={clearHistory} className="w-full text-left" style={{ fontSize: 'var(--text-sm)' }}>
-            Clear history
-          </Button>
-        )}
+      {/* Left panel — suggested questions */}
+      <div className="flex-shrink-0 py-2" style={{ width: 260 }}>
         {chatHistory.length === 0 && <SuggestedQuestions onSelect={sendMessage} />}
       </div>
 
@@ -42,11 +33,19 @@ export default function Chat() {
             <ChatMessage key={i} message={msg} />
           ))}
           {loading && (
-            <div className="flex justify-start mb-4">
-              <div className="flex items-center gap-2 px-4 py-3 rounded-card" style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}>
+            <div className="flex justify-start items-start gap-3 mb-4">
+              <AssistantAvatar />
+              <div
+                className="flex items-center gap-2 px-4 py-3 rounded-card"
+                style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
+              >
                 <div className="flex gap-1">
-                  {[0,1,2].map(i => (
-                    <div key={i} className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-accent)', animationDelay: `${i * 100}ms` }} />
+                  {[0, 1, 2].map(i => (
+                    <div
+                      key={i}
+                      className="w-2 h-2 rounded-full animate-bounce"
+                      style={{ background: 'var(--color-accent)', animationDelay: `${i * 100}ms` }}
+                    />
                   ))}
                 </div>
                 <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>Thinking…</span>

@@ -1,5 +1,7 @@
 import { useLocation } from 'react-router-dom'
 import DateRangePicker from '../ui/DateRangePicker'
+import Button from '../ui/Button'
+import { useAppContext } from '../../context/AppContext'
 
 const TITLES: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -8,6 +10,7 @@ const TITLES: Record<string, string> = {
 
 export default function TopBar() {
   const { pathname } = useLocation()
+  const { chatHistory, clearHistory } = useAppContext()
   const title = TITLES[pathname] ?? 'HERMES'
 
   return (
@@ -18,7 +21,14 @@ export default function TopBar() {
       <h1 className="font-display font-bold" style={{ fontSize: 'var(--text-xl)', color: 'var(--color-text-primary)' }}>
         {title}
       </h1>
-      {pathname === '/dashboard' && <DateRangePicker />}
+      <div className="flex items-center">
+        {pathname === '/dashboard' && <DateRangePicker />}
+        {pathname === '/chat' && chatHistory.length > 0 && (
+          <Button variant="ghost" onClick={clearHistory} style={{ fontSize: 'var(--text-sm)' }}>
+            Clear history
+          </Button>
+        )}
+      </div>
     </header>
   )
 }
