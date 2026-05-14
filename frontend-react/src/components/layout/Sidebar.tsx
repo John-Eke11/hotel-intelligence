@@ -1,11 +1,10 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, MessageSquare, Home } from 'lucide-react'
+import { LayoutDashboard, MessageSquare } from 'lucide-react'
 import { useEffect } from 'react'
 import { api } from '../../api/client'
 import { useAppContext } from '../../context/AppContext'
 
 const NAV = [
-  { to: '/',          label: 'Home',      Icon: Home           },
   { to: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { to: '/chat',      label: 'Chat',      Icon: MessageSquare  },
 ]
@@ -34,10 +33,10 @@ export default function Sidebar() {
           className="flex items-center justify-center font-display font-bold text-bg-base"
           style={{ width: 28, height: 28, background: 'var(--color-accent)', borderRadius: 6, fontSize: 16, flexShrink: 0 }}
         >
-          A
+          H
         </div>
         <div>
-          <p className="font-display font-bold text-text-primary" style={{ fontSize: 16, lineHeight: 1.2 }}>ATLAS</p>
+          <p className="font-display font-bold text-text-primary" style={{ fontSize: 16, lineHeight: 1.2 }}>HERMES</p>
           <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', lineHeight: 1.2 }}>Revenue Intelligence</p>
         </div>
       </div>
@@ -48,7 +47,6 @@ export default function Sidebar() {
           <NavLink
             key={to}
             to={to}
-            end={to === '/'}
             className="flex items-center gap-3 px-3 py-2 rounded-md transition-colors duration-150"
             style={({ isActive }) => ({
               background: isActive ? 'var(--color-bg-surface)' : 'transparent',

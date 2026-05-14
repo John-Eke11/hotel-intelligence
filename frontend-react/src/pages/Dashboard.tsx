@@ -21,6 +21,16 @@ function EventsTable({ data, loading }: { data: ApiEvent[] | null; loading: bool
   if (loading) return <div className="h-40 rounded animate-pulse" style={{ background: 'var(--color-bg-surface)' }} />
   if (!data?.length) return <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>No events in this period.</p>
 
+  // Deduplicate by event_name + event_start_date — the DB may contain duplicate rows
+  // if the seed script was run more than once without --reset.
+  const seen = new Set<string>()
+  const unique = data.filter(e => {
+    const key = `${e.event_name}|${e.event_start_date}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full" style={{ borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
@@ -34,8 +44,8 @@ function EventsTable({ data, loading }: { data: ApiEvent[] | null; loading: bool
           </tr>
         </thead>
         <tbody>
-          {data.map((e, i) => (
-            <tr key={i} style={{ borderBottom: '1px solid var(--color-border)' }}>
+          {unique.map(e => (
+            <tr key={`${e.event_name}|${e.event_start_date}`} style={{ borderBottom: '1px solid var(--color-border)' }}>
               <td className="px-4 py-2" style={{ color: 'var(--color-text-primary)' }}>{e.event_name}</td>
               <td className="px-4 py-2"><Badge label={e.event_type} variant={eventBadgeVariant(e.event_type)} /></td>
               <td className="px-4 py-2" style={{ color: 'var(--color-text-secondary)' }}>{e.event_start_date}</td>

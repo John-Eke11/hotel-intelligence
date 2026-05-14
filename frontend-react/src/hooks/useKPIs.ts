@@ -8,12 +8,16 @@ export function useKPIs(from: string, to: string) {
   const [error, setError]     = useState(false)
 
   useEffect(() => {
+    const controller = new AbortController()
     setLoading(true); setError(false)
-    api.getKPIs(from, to).then(res => {
-      setData(res)
-      setError(res === null)
-      setLoading(false)
+    api.getKPIs(from, to, controller.signal).then(res => {
+      if (!controller.signal.aborted) {
+        setData(res)
+        setError(res === null)
+        setLoading(false)
+      }
     })
+    return () => controller.abort()
   }, [from, to])
 
   return { data, loading, error }

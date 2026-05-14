@@ -2,14 +2,13 @@ import { useLocation } from 'react-router-dom'
 import DateRangePicker from '../ui/DateRangePicker'
 
 const TITLES: Record<string, string> = {
-  '/':          'Home',
   '/dashboard': 'Dashboard',
   '/chat':      'Revenue Chat',
 }
 
 export default function TopBar() {
   const { pathname } = useLocation()
-  const title = TITLES[pathname] ?? 'ATLAS'
+  const title = TITLES[pathname] ?? 'HERMES'
 
   return (
     <header
