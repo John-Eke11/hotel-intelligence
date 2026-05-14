@@ -8,7 +8,7 @@ from datetime import date
 import requests
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:14b")
 
 _SCHEMA = """
 Database: PostgreSQL — Hotel Lisboa Central (100-room 4-star hotel in Lisbon)
@@ -130,56 +130,6 @@ Hospitality Key KPI formulas (always use these exact definitions):
                       / NULLIF(COUNT(*), 0)
                       -- same denominator and date filter logic as Cancellation Rate above
 
-  Pace / Pickup    = rooms booked FOR a future stay date as of today,
-                     compared to the same forward window at the same point last year
-                     -- "booked for" means: check_in_date >= target_date
-                     -- "as of today" means: booking_date <= CURRENT_DATE
-                     -- "same point last year" means: booking_date <= CURRENT_DATE - INTERVAL '1 year'
-                     -- Standard pickup query structure:
-                       SELECT
-                         check_in_date,
-                         COUNT(*) FILTER (WHERE booking_date <= CURRENT_DATE)
-                           AS bookings_on_books_this_year,
-                         SUM(length_of_stay) FILTER (WHERE booking_date <= CURRENT_DATE)
-                           AS room_nights_on_books_this_year,
-                         COUNT(*) FILTER (WHERE booking_date <= CURRENT_DATE - INTERVAL '1 year'
-                                          AND check_in_date BETWEEN
-                                            from_date + INTERVAL '1 year'
-                                            AND to_date + INTERVAL '1 year')
-                           AS bookings_same_point_last_year
-                       FROM reservations
-                       WHERE property_id = {property_id}
-                         AND booking_status IN ('confirmed', 'checked_out')
-                         AND check_in_date >= CURRENT_DATE
-                         AND check_in_date < to_date
-                       GROUP BY check_in_date
-                       ORDER BY check_in_date
-                     -- NOTE: cancelled/no_show excluded from pace — they do not represent demand on books
-
-  ARI (Average Rate Index) = property_avg_rate / comp_set_avg_rate
-                     -- property_avg_rate: AVG(r.rate_per_night) for checked_out reservations
-                     --   in the period, filtered by matching room_type and channel if specified
-                     -- comp_set_avg_rate: AVG(cr.rate_per_night) FROM competitor_rates
-                     --   for the same stay_date range
-                     -- Default comparison: blended average across all competitors, all channels,
-                     --   matching room_type only — do not filter by hotel_name unless asked
-                     -- ARI > 1.0 means property is pricing above the comp set average
-                     -- ARI < 1.0 means property is pricing below the comp set average
-                     -- Standard ARI query structure:
-                       SELECT
-                         ROUND(AVG(r.rate_per_night) /
-                           NULLIF((SELECT AVG(cr.rate_per_night)
-                                   FROM competitor_rates cr
-                                   WHERE cr.stay_date >= from_date
-                                     AND cr.stay_date < to_date
-                                     AND cr.room_type = r.room_type), 0), 4) AS ari
-                       FROM reservations r
-                       WHERE r.property_id = {property_id}
-                         AND r.booking_status = 'checked_out'
-                         AND r.check_in_date >= from_date
-                         AND r.check_in_date < to_date
-                     -- For a blended ARI across all room types, remove the room_type join condition
-
   Computing days_in_period in PostgreSQL:
     -- Always use >= from_date AND < to_date (exclusive upper bound) for both filter and denominator
     days_in_period = to_date::date - from_date::date   -- e.g. Mar 1 to Apr 1 = 31 days
@@ -222,19 +172,6 @@ WHERE r.property_id = {property_id}
   AND r.check_in_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')::date
   AND r.check_in_date <  DATE_TRUNC('month', CURRENT_DATE)::date;
 
-Q: What is our ADR and RevPAR year to date?
-A:
-SELECT
-  ROUND(SUM(r.total_room_revenue) / NULLIF(SUM(r.length_of_stay), 0), 2)                  AS adr,
-  ROUND(SUM(r.total_room_revenue) / NULLIF(
-    MAX(p.total_rooms) * (CURRENT_DATE - DATE_TRUNC('year', CURRENT_DATE)::date), 0), 2)  AS revpar
-FROM reservations r
-JOIN property p ON p.property_id = r.property_id
-WHERE r.property_id = {property_id}
-  AND r.booking_status = 'checked_out'
-  AND r.check_in_date >= DATE_TRUNC('year', CURRENT_DATE)::date
-  AND r.check_in_date <  CURRENT_DATE;
-
 Q: Which booking channel generated the most revenue this year?
 A:
 SELECT booking_channel,
@@ -247,45 +184,6 @@ WHERE property_id = {property_id}
 GROUP BY booking_channel
 ORDER BY total_revenue DESC;
 
-Q: How are we tracking against budget this month?
-A:
-WITH actuals AS (
-  SELECT
-    DATE_TRUNC('month', r.check_in_date)::date        AS month,
-    SUM(r.total_revenue)                               AS reservation_revenue
-  FROM reservations r
-  WHERE r.property_id = {property_id}
-    AND r.booking_status = 'checked_out'
-    AND r.check_in_date >= DATE_TRUNC('month', CURRENT_DATE)::date
-    AND r.check_in_date <  (DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month')::date
-  GROUP BY 1
-),
-event_actuals AS (
-  SELECT COALESCE(SUM(total_event_revenue), 0) AS event_revenue
-  FROM event_bookings
-  WHERE property_id = {property_id}
-    AND booking_date >= DATE_TRUNC('month', CURRENT_DATE)::date
-    AND booking_date <  (DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month')::date
-)
-SELECT
-  TO_CHAR(bt.month, 'YYYY-MM')                                                      AS month,
-  ROUND(COALESCE(a.reservation_revenue, 0) + COALESCE(ea.event_revenue, 0), 2)      AS actual_revenue,
-  ROUND((bt.target_occupancy
-         * MAX(p.total_rooms)
-         * ((bt.month + INTERVAL '1 month')::date - bt.month)
-         * bt.target_adr
-         + bt.target_fnb_revenue
-         + bt.target_spa_revenue)::numeric, 2)                                       AS target_revenue
-FROM budget_targets bt
-JOIN property p ON p.property_id = bt.property_id
-LEFT JOIN actuals a ON a.month = bt.month
-CROSS JOIN event_actuals ea
-WHERE bt.property_id = {property_id}
-  AND bt.month = DATE_TRUNC('month', CURRENT_DATE)::date
-GROUP BY bt.month, bt.target_occupancy, bt.target_adr,
-         bt.target_fnb_revenue, bt.target_spa_revenue,
-         a.reservation_revenue, ea.event_revenue;
-
 Q: What is the average length of stay for corporate guests?
 A:
 -- guest_segment = 'corporate' identifies corporate guests. Do NOT use booking_channel for this.
@@ -296,31 +194,14 @@ WHERE property_id = {property_id}
   AND booking_status = 'checked_out'
   AND guest_segment = 'corporate';
 
-Q: Which room type performs best during events?
-A:
--- room_type lives in reservations (r), NOT in events (e).
--- Join reservations to events via date overlap, then group by r.room_type.
-SELECT
-  r.room_type,
-  COUNT(*)                                      AS bookings,
-  SUM(r.length_of_stay)                         AS room_nights,
-  ROUND(SUM(r.total_revenue)::numeric, 2)       AS total_revenue,
-  ROUND(AVG(r.rate_per_night)::numeric, 2)      AS avg_rate
-FROM reservations r
-JOIN events e ON r.check_in_date BETWEEN e.event_start_date AND e.event_end_date
-WHERE r.property_id = {property_id}
-  AND r.booking_status = 'checked_out'
-GROUP BY r.room_type
-ORDER BY total_revenue DESC;
-
 Q: How was our channel performance last month compared to the same time last year?
 A:
 -- Column is booking_channel (NOT channel). Use CTEs for YoY comparison.
 WITH last_month AS (
   SELECT
     booking_channel,
-    SUM(total_revenue)::float  AS revenue,
-    COUNT(*)                   AS bookings
+    SUM(total_revenue)::numeric  AS revenue,
+    COUNT(*)                     AS bookings
   FROM reservations
   WHERE property_id = {property_id}
     AND booking_status = 'checked_out'
@@ -331,8 +212,8 @@ WITH last_month AS (
 same_month_last_year AS (
   SELECT
     booking_channel,
-    SUM(total_revenue)::float  AS revenue,
-    COUNT(*)                   AS bookings
+    SUM(total_revenue)::numeric  AS revenue,
+    COUNT(*)                     AS bookings
   FROM reservations
   WHERE property_id = {property_id}
     AND booking_status = 'checked_out'
@@ -353,38 +234,6 @@ FROM last_month lm
 FULL OUTER JOIN same_month_last_year ly USING (booking_channel)
 ORDER BY revenue_last_month DESC;
 
-Q: How did our rates compare to competitors during Web Summit?
-A:
-SELECT
-  cr.stay_date,
-  cr.hotel_name,
-  cr.room_type,
-  cr.channel,
-  cr.rate_per_night
-FROM competitor_rates cr
-JOIN events e ON cr.stay_date BETWEEN e.event_start_date AND e.event_end_date
-WHERE e.event_name ILIKE '%Web Summit%'
-ORDER BY cr.stay_date, cr.hotel_name;
-
-
-Q: What was our Net RevPAR last month?
-A:
-SELECT
-  ROUND(
-    SUM(r.net_rate_per_night * r.length_of_stay) /
-    NULLIF(
-      MAX(p.total_rooms) * (
-        DATE_TRUNC('month', CURRENT_DATE)::date -
-        DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')::date
-      ), 0
-    ), 2
-  ) AS net_revpar
-FROM reservations r
-JOIN property p ON p.property_id = r.property_id
-WHERE r.property_id = {property_id}
-  AND r.booking_status = 'checked_out'
-  AND r.check_in_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')::date
-  AND r.check_in_date <  DATE_TRUNC('month', CURRENT_DATE)::date;
 
 Q: How did we price against competitors during Ironman Cascais 2025?
 A:
@@ -444,111 +293,13 @@ FULL OUTER JOIN comp_rates cr
   ON pr.stay_date = cr.stay_date
   AND pr.room_type = cr.room_type
 ORDER BY stay_date, room_type;
-
-Q: What was our cancellation and no-show rate last month?
-A:
--- Period filter uses booking_date (when the booking was made), not check_in_date.
--- Denominator includes ALL booking statuses — never pre-filter before counting.
-SELECT
-  COUNT(*)                                                             AS total_bookings,
-  COUNT(*) FILTER (WHERE booking_status = 'cancelled')                AS cancellations,
-  COUNT(*) FILTER (WHERE booking_status = 'no_show')                  AS no_shows,
-  ROUND(
-    COUNT(*) FILTER (WHERE booking_status = 'cancelled')::numeric /
-    NULLIF(COUNT(*), 0), 4
-  )                                                                    AS cancellation_rate,
-  ROUND(
-    COUNT(*) FILTER (WHERE booking_status = 'no_show')::numeric /
-    NULLIF(COUNT(*), 0), 4
-  )                                                                    AS no_show_rate
-FROM reservations
-WHERE property_id = {property_id}
-  AND booking_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')::date
-  AND booking_date <  DATE_TRUNC('month', CURRENT_DATE)::date;
-
-Q: How does our current rate compare to the comp set this month (ARI)?
-A:
--- ARI = property avg rate / comp set avg rate.
--- Blended across all room types and channels unless asked to filter.
--- comp set avg uses stay_date; property avg uses check_in_date (check_in_date limitation applies).
--- ARI > 1.0 = pricing above comp set; ARI < 1.0 = pricing below.
-WITH property_rate AS (
-  SELECT
-    AVG(r.rate_per_night) AS avg_rate
-  FROM reservations r
-  WHERE r.property_id = {property_id}
-    AND r.booking_status = 'checked_out'
-    AND r.check_in_date >= DATE_TRUNC('month', CURRENT_DATE)::date
-    AND r.check_in_date <  (DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month')::date
-),
-comp_rate AS (
-  SELECT
-    AVG(cr.rate_per_night) AS avg_rate
-  FROM competitor_rates cr
-  WHERE cr.stay_date >= DATE_TRUNC('month', CURRENT_DATE)::date
-    AND cr.stay_date <  (DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month')::date
-)
-SELECT
-  ROUND(pr.avg_rate, 2)                              AS property_avg_rate,
-  ROUND(cr.avg_rate, 2)                              AS comp_set_avg_rate,
-  ROUND(pr.avg_rate / NULLIF(cr.avg_rate, 0), 4)    AS ari
-FROM property_rate pr
-CROSS JOIN comp_rate cr;
-
-Q: What is our booking pace for the next 30 days compared to the same point last year?
-A:
--- Pace compares room-nights currently on the books for a future window
--- against room-nights that were on the books at the equivalent point last year.
--- This year:  check_in_date in [today, today+30), booking_date <= today, status confirmed/checked_out
--- Last year:  check_in_date in [today-1yr, today-1yr+30), booking_date <= today-1yr, status checked_out only
---             (no confirmed bookings exist in the past by definition)
-WITH this_year AS (
-  SELECT
-    check_in_date,
-    COUNT(*)              AS bookings,
-    SUM(length_of_stay)   AS room_nights_on_books
-  FROM reservations
-  WHERE property_id = {property_id}
-    AND booking_status IN ('confirmed', 'checked_out')
-    AND check_in_date >= CURRENT_DATE
-    AND check_in_date <  CURRENT_DATE + INTERVAL '30 days'
-    AND booking_date  <= CURRENT_DATE
-  GROUP BY check_in_date
-),
-last_year AS (
-  SELECT
-    check_in_date + INTERVAL '1 year'   AS check_in_date,   -- shift to this year for alignment
-    COUNT(*)                            AS bookings,
-    SUM(length_of_stay)                 AS room_nights_on_books
-  FROM reservations
-  WHERE property_id = {property_id}
-    AND booking_status = 'checked_out'
-    AND check_in_date >= CURRENT_DATE - INTERVAL '1 year'
-    AND check_in_date <  CURRENT_DATE - INTERVAL '1 year' + INTERVAL '30 days'
-    AND booking_date  <= CURRENT_DATE - INTERVAL '1 year'
-  GROUP BY check_in_date
-)
-SELECT
-  COALESCE(ty.check_in_date, ly.check_in_date)       AS stay_date,
-  COALESCE(ty.room_nights_on_books, 0)                AS room_nights_ty,
-  COALESCE(ly.room_nights_on_books, 0)                AS room_nights_ly,
-  COALESCE(ty.room_nights_on_books, 0) -
-    COALESCE(ly.room_nights_on_books, 0)              AS pickup_variance,
-  ROUND(
-    (COALESCE(ty.room_nights_on_books, 0) -
-     COALESCE(ly.room_nights_on_books, 0))::numeric /
-    NULLIF(ly.room_nights_on_books, 0) * 100, 1
-  )                                                   AS variance_pct
-FROM this_year ty
-FULL OUTER JOIN last_year ly USING (check_in_date)
-ORDER BY stay_date;
 """
 
 _SQL_SYSTEM = """\
 You are an expert PostgreSQL analyst for a hotel revenue management system. /no_think
-Today's date is {today}.
+Today's date is {today}. IMPORTANT: Always use this exact date — never rely on your training data for the current date, month, or year.
 Convert the user's question into a single valid SQL statement.
-{schema}
+Ensure you write the SQL queries using the database schema defined here {schema}
 
 {kpi_formulas}
 
@@ -571,15 +322,16 @@ Rules:
 - For cancellation rate and no-show rate queries: use booking_date (not check_in_date) as the period filter, and COUNT all booking statuses in the denominator before applying FILTER.
 - Default period filter is check_in_date. Use booking_date only for: cancellation rate, no-show rate, and pace/pickup queries.
 - Always use NULLIF to avoid division by zero in KPI calculations.
+- Always cast revenue aggregates to ::numeric (not ::float) — PostgreSQL's ROUND(value, n) requires numeric, not double precision.
 - Always write MAX(p.total_rooms) when using property.total_rooms alongside aggregate functions — never use bare p.total_rooms in an aggregate query. Only reference p.total_rooms in queries that JOIN the property table.
-- For KPIs requiring multiple steps (pace, ARI, budget variance, TRevPAR), always use CTEs. Never inline subqueries where a CTE was shown in the examples.
+- For KPIs requiring multiple steps (pace, ARI, budget variance, TRevPAR), always use CTEs. Never inline subqueries.
+- Every query must be a single, self-contained SQL statement. All CTEs must be defined with WITH in the same statement — never reference a CTE name that is not defined in the current query's WITH clause. There are no persistent views or helper tables such as event_window in the database.
 - Output ONLY the raw SQL — no explanation, no markdown, no code fences.
 - Add LIMIT 50 to row-level queries; aggregates do not need a limit.
-- Use only SELECT statements.
 """
 
 _SUMMARY_SYSTEM = """\
-You are a hotel revenue analyst assistant. /no_think Today's date is {today}.
+You are a hotel revenue analyst assistant. /no_think Today's date is {today}. IMPORTANT: Always use this exact date — never rely on your training data for the current date, month, or year.
 Given a user's question and query results, write a clear answer analyzing the data and the implications.
 Be specific: include key numbers, percentages, or rankings from the data.
 Do not repeat raw data row-by-row. Do not mention SQL.
@@ -589,17 +341,61 @@ Do not repeat raw data row-by-row. Do not mention SQL.
 def _call_ollama(messages: list[dict]) -> str:
     resp = requests.post(
         f"{OLLAMA_BASE_URL}/api/chat",
-        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False, "think": False},
+        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False},
         timeout=180,
     )
     resp.raise_for_status()
-    content = resp.json()["message"]["content"]
-    return _strip_thinking(content).strip()
+    return _strip_thinking(resp.json()["message"]["content"]).strip()
+
+
+_SQL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "run_sql_query",
+        "description": "Run a SELECT query against the hotel database to answer a data question.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A valid PostgreSQL SELECT or WITH ... SELECT query.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
+def _extract_json_object(text: str) -> dict | None:
+    """Find and parse the first complete JSON object in text, ignoring trailing content."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except (json.JSONDecodeError, ValueError):
+                    return None
+    return None
 
 
 def _strip_thinking(text: str) -> str:
-    """Remove <think>…</think> blocks emitted by Qwen3 in thinking mode."""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    """Remove thinking blocks emitted by various models."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL)
+    return text.strip()
+
+
+def _normalize_sql(sql: str) -> str:
+    """Replace unicode operators that models sometimes emit with ASCII equivalents."""
+    return sql.replace("≥", ">=").replace("≤", "<=").replace("≠", "!=").replace("–", "-")
 
 
 def _strip_fences(sql: str) -> str:
@@ -634,6 +430,16 @@ def _extract_sql(text: str) -> str | None:
         if upper_c.startswith("SELECT") or re.match(r"WITH\s+\w+\s+AS\s*\(", candidate, re.IGNORECASE):
             return candidate
 
+    # WITH CTE — check before SELECT so we don't extract a SELECT that's
+    # inside a CTE body and miss the leading WITH <name> AS ( prefix.
+    cte_start = re.search(r"\bWITH\s+\w+\s+AS\s*\(", text, re.IGNORECASE)
+    if cte_start:
+        candidate = text[cte_start.start():]
+        last_semi = candidate.rfind(";")
+        if last_semi != -1:
+            return candidate[: last_semi + 1].strip()
+        return candidate.strip()
+
     # SELECT embedded in explanation text
     sql_start = re.search(r"\bSELECT\b", text, re.IGNORECASE)
     if sql_start:
@@ -643,17 +449,31 @@ def _extract_sql(text: str) -> str | None:
             return candidate[: last_semi + 1].strip()
         return candidate.strip()
 
-    # WITH CTE — require the full CTE pattern (WITH <name> AS () to avoid
-    # matching ordinary English sentences that start with "with"
-    cte_start = re.search(r"\bWITH\s+\w+\s+AS\s*\(", text, re.IGNORECASE)
-    if cte_start:
-        candidate = text[cte_start.start():]
-        last_semi = candidate.rfind(";")
-        if last_semi != -1:
-            return candidate[: last_semi + 1].strip()
-        return candidate.strip()
-
     return None
+
+
+def generate_fixed_sql(history: list[dict], failed_sql: str, error: str, property_id: int = 1) -> str:
+    """Re-prompt the model with the failed SQL and the database error to get a corrected query."""
+    system = _SQL_SYSTEM.format(
+        schema=_SCHEMA,
+        kpi_formulas=_KPI_FORMULAS.format(property_id=property_id),
+        few_shot_examples=_FEW_SHOT_EXAMPLES.format(property_id=property_id),
+        property_id=property_id,
+        today=date.today().isoformat(),
+    )
+    fix_prompt = (
+        f"The SQL query below failed with this database error:\n\n"
+        f"Error: {error}\n\n"
+        f"Failed SQL:\n{failed_sql}\n\n"
+        f"Fix the SQL so it runs without errors. Output ONLY the corrected SQL — no explanation."
+    )
+    messages = [
+        {"role": "system", "content": system},
+        *history,
+        {"role": "user", "content": fix_prompt},
+    ]
+    sql = _call_ollama(messages)
+    return _strip_fences(_extract_sql(sql) or sql)
 
 
 def generate_sql_from_text(user_query: str, property_id: int = 1) -> str:
@@ -696,40 +516,27 @@ def generate_natural_answer(user_query: str, results: list[dict]) -> str:
 # ── Conversation-aware functions ──────────────────────────────────────────────
 
 _ROUTER_SYSTEM = """\
-You are a hotel revenue intelligence assistant for Hotel Lisboa Central. /no_think Today's date is {today}.
+You are a hotel revenue intelligence assistant for Hotel Lisboa Central. Today's date is {today}. IMPORTANT: Always use this exact date — never rely on your training data for the current date, month, or year.
 You have access to a PostgreSQL database and deep hospitality industry knowledge.
 
-════ STEP 1 — DECIDE ════
-Answer directly (ANSWER:) when the question:
-  - Asks for a definition or explanation (e.g. "what is RevPAR?", "explain ADR")
-  - Asks for your opinion, recommendation, or analysis of data already in the conversation
-  - Asks about industry benchmarks, best practices, or general hospitality knowledge
-  - Is a follow-up that can be answered from results already shown in the conversation
-  - Asks about the current date, month, or year
+════ WHEN TO CALL run_sql_query ════
+Call run_sql_query when the question requires data from the database:
+  - Specific numbers, metrics, or trends from this hotel's data
+  - Actual performance (occupancy, revenue, ADR, bookings, etc.)
+  - Fresh data not already shown in the conversation
 
-Query the database (SQL) when the question:
-  - Asks for specific numbers, metrics, or trends from this hotel's data
-  - Asks about actual performance (occupancy, revenue, ADR, bookings, etc.)
-  - Requires fresh data not already shown in the conversation
+════ WHEN TO RESPOND DIRECTLY ════
+Respond with plain text — do NOT call run_sql_query — when:
+  - The question asks for a definition or explanation (e.g. "what is RevPAR?", "explain ADR")
+  - The question asks for opinion, recommendation, or analysis of data already in the conversation
+  - The question is about industry benchmarks or general hospitality knowledge
+  - The question is about the current date, month, or year — use the date already provided above, NEVER query the database for date or time information
 
-════ STEP 2 — OUTPUT ════
-- Direct answer: start with "ANSWER: " followed immediately by your response.
-- Database query: output ONLY the raw SQL (SELECT or WITH) — no labels, no explanation, no code fences.
+Example of a direct answer (no tool call):
+  Q: What month and year is it?
+  A: Today is {today}. The current month is {month} and the year is {year}.
 
-Examples of DIRECT answers (no SQL needed):
-  Q: What is RevPAR?
-  ANSWER: RevPAR (Revenue Per Available Room) is total room revenue divided by total available rooms...
-
-  Q: What month is it?
-  ANSWER: Today is {today}, so the current month is...
-
-  Q: Is that occupancy good or bad?
-  ANSWER: Based on the data we just looked at, an occupancy of X% for a 4-star Lisbon hotel in [month]...
-
-  Q: What drives demand in Lisbon in summer?
-  ANSWER: Lisbon's summer demand is primarily driven by leisure tourism from the UK, Spain, and Germany...
-
-════ DATABASE SCHEMA & SQL RULES (only apply when generating SQL) ════
+════ DATABASE SCHEMA & SQL RULES ════
 
 {schema}
 
@@ -753,7 +560,9 @@ SQL rules:
 - Never include 'cancelled' or 'no_show' unless specifically asked.
 - Always use MAX(p.total_rooms) when using property.total_rooms alongside aggregate functions.
 - Always use NULLIF to avoid division by zero in KPI calculations.
+- Always cast revenue aggregates to ::numeric (not ::float) — PostgreSQL's ROUND(value, n) requires numeric, not double precision.
 - For multi-step KPIs use CTEs, not inline subqueries.
+- Every query must be a single, self-contained SQL statement. All CTEs must be defined with WITH in the same statement — never reference a CTE name that is not defined in the current query's WITH clause. There are no persistent views or helper tables such as event_window in the database.
 - Every column referenced in a JOIN condition must be explicitly selected in the CTE — never reference a column in ON/WHERE that was not included in the CTE's SELECT list.
 - CTEs that are joined by stay_date or check_in_date MUST include that date column in their SELECT. CTEs that are CROSS JOINed (single aggregate row) must NOT include date columns.
 - Add LIMIT 50 to row-level queries; aggregates do not need a limit.
@@ -761,11 +570,11 @@ SQL rules:
 """
 
 _CONTEXTUAL_SUMMARY_SYSTEM = """\
-You are a hotel revenue intelligence assistant for Hotel Lisboa Central. /no_think Today's date is {today}.
+You are a hotel revenue intelligence assistant for Hotel Lisboa Central. /no_think Today's date is {today}. IMPORTANT: Always use this exact date — never rely on your training data for the current date, month, or year.
 Given a user's question and the database results that answered it, write a thorough analysis as an experienced revenue manager would.
 - Output ONLY natural language text. Never generate SQL queries.
 - Lead with the direct answer to the question (key number, trend, or finding).
-- Follow with analysis: what does this mean for the business? Is it good or bad? What might be driving it?
+- ONLY IF an analysis is explicitly asked, provide an analysis of the results: what does this mean for the business? Is it good or bad? What might be driving it?
 - IF relevant: compare to industry benchmarks, highlight outliers, or flag revenue opportunities.
 - Your analysis should be easy to scan with a clear recommendation and not overwhelm the user with too much text unless requested.
 - Humanize your analysis using natural language so it's easy to understand.
@@ -776,34 +585,75 @@ Given a user's question and the database results that answered it, write a thoro
 
 def generate_sql_or_answer(messages: list[dict], property_id: int = 1) -> tuple[str, bool]:
     """
-    Takes the full conversation as Ollama-format messages (role + content strings).
     Returns (content, is_sql):
-      is_sql=True  → content is a SQL query ready to execute
+      is_sql=True  → content is a SQL query from the run_sql_query tool call
       is_sql=False → content is a direct text answer
     """
+    today = date.today()
     system = _ROUTER_SYSTEM.format(
         schema=_SCHEMA,
         kpi_formulas=_KPI_FORMULAS.format(property_id=property_id),
         few_shot_examples=_FEW_SHOT_EXAMPLES.format(property_id=property_id),
         property_id=property_id,
-        today=date.today().isoformat(),
+        today=today.isoformat(),
+        month=today.strftime("%B"),
+        year=today.year,
     )
-    full_messages = [{"role": "system", "content": system}] + messages
-    raw = _call_ollama(full_messages)
 
-    # Direct answer — check before anything else
-    if "ANSWER:" in raw.upper():
-        idx = raw.upper().find("ANSWER:")
-        return raw[idx + 7:].strip(), False
+    trimmed = messages[-6:] if len(messages) > 6 else messages
+    full_messages = [{"role": "system", "content": system}] + trimmed
 
-    # Try to extract SQL from the response (handles clean SQL, code fences,
-    # Q:/A: wrappers, and SQL embedded inside explanations)
-    sql = _extract_sql(raw)
-    if sql:
-        return sql, True
+    resp = requests.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": OLLAMA_MODEL,
+            "messages": full_messages,
+            "tools": [_SQL_TOOL],
+            "stream": False,
+        },
+        timeout=180,
+    )
+    resp.raise_for_status()
+    message = resp.json()["message"]
 
-    # Fallback: treat as a direct answer
-    return raw.strip(), False
+    for call in message.get("tool_calls") or []:
+        if call["function"]["name"] == "run_sql_query":
+            args = call["function"]["arguments"]
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (json.JSONDecodeError, ValueError):
+                    args = {}
+            sql = args.get("query", "") if isinstance(args, dict) else ""
+            if sql:
+                return sql, True
+
+    content = _strip_thinking(message.get("content", "")).strip()
+
+    # Some models output the tool call as JSON text in content instead of
+    # using the tool API (e.g. {"name": "run_sql_query", "arguments": {...}}).
+    # Use brace-matching to extract the JSON object, ignoring any trailing text.
+    if content:
+        parsed = _extract_json_object(content)
+        if isinstance(parsed, dict) and parsed.get("name") == "run_sql_query":
+            sql = parsed.get("arguments", {}).get("query", "")
+            if sql:
+                return _normalize_sql(sql), True
+
+    # Model returned nothing — retry without tools and extract SQL from plain text.
+    if not content:
+        resp2 = requests.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json={"model": OLLAMA_MODEL, "messages": full_messages, "stream": False},
+            timeout=180,
+        )
+        resp2.raise_for_status()
+        content = _strip_thinking(resp2.json()["message"].get("content", "")).strip()
+        sql = _extract_sql(content)
+        if sql:
+            return _normalize_sql(sql), True
+
+    return content, False
 
 
 def generate_contextual_answer(messages: list[dict], results: list[dict]) -> str:
@@ -827,7 +677,6 @@ def generate_contextual_answer(messages: list[dict], results: list[dict]) -> str
                 f"Question: {last_question}\n\n"
                 f"Query results ({len(results)} rows, showing first {len(sample)}):\n"
                 f"{results_json}\n\n"
-                "Provide a thorough revenue management analysis of these results. Do not generate SQL."
             ),
         },
     ]

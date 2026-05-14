@@ -9,8 +9,7 @@ GET  /metrics/revenue-by-channel   revenue breakdown by booking channel
 GET  /metrics/revenue-by-segment   revenue breakdown by guest segment
 GET  /metrics/monthly-trend        actual vs budget revenue per month
 GET  /events                       external demand drivers in a date range
-POST /chat                         NL query → SQL → tabular results (LLM mocked)
-POST /api/query                    legacy NL endpoint with LRU cache (LLM mocked)
+POST /chat                         NL query → SQL → tabular results
 """
 
 import json
@@ -20,22 +19,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from datetime import date, timedelta
-from functools import lru_cache
 from typing import Optional
 
 import psycopg2
+from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from models import ChatRequest, ChatResponse, QueryRequest, QueryResponse
+from models import ChatRequest, ChatResponse
 
 from llm.agent import (
-    generate_sql_from_text,
-    generate_natural_answer,
     generate_sql_or_answer,
     generate_contextual_answer,
+    generate_fixed_sql,
 )
 
 load_dotenv()
@@ -45,7 +43,6 @@ app = FastAPI(title="Hotel Revenue Intelligence API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -53,23 +50,31 @@ app.add_middleware(
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def get_db_connection():
-    """Establishes a connection to the PostgreSQL database using DATABASE_URL."""
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
+_db_pool: pg_pool.ThreadedConnectionPool | None = None
+
+
+def _get_pool() -> pg_pool.ThreadedConnectionPool:
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = pg_pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=10,
+            dsn=os.getenv("DATABASE_URL"),
+        )
+    return _db_pool
 
 
 def fetch_all(sql: str, params: tuple) -> list[dict]:
-    conn = get_db_connection()
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # psycopg2 treats % as a parameter placeholder — escape any literal
-            # % in LLM-generated SQL (e.g. ILIKE '%value%') when no params are used.
             if not params:
                 sql = sql.replace("%", "%%")
             cur.execute(sql, params)
             return [dict(row) for row in cur.fetchall()]
     finally:
-        conn.close()
+        pool.putconn(conn)
 
 
 def fetch_one(sql: str, params: tuple) -> Optional[dict]:
@@ -310,12 +315,23 @@ def chat(request: ChatRequest):
         content, is_sql = generate_sql_or_answer(history, request.property_id)
 
         if not is_sql:
+            if not content:
+                content = "I wasn't able to generate a response. Please try rephrasing your question."
             return ChatResponse(summary=content, sql=None, data=None)
 
-        if not content.strip().upper().startswith(("SELECT", "WITH")):
-            raise ValueError("Only SELECT queries are permitted.")
+        try:
+            rows_raw = fetch_all(content, ())
+        except psycopg2.Error as db_err:
+            try:
+                content = generate_fixed_sql(history, content, str(db_err), request.property_id)
+                rows_raw = fetch_all(content, ())
+            except psycopg2.Error:
+                return ChatResponse(
+                    summary="Sorry, I couldn't process that query. Please try rephrasing.",
+                    sql=None,
+                    data=None,
+                )
 
-        rows_raw = fetch_all(content, ())
         columns  = list(rows_raw[0].keys()) if rows_raw else []
         rows     = [[row[c] for c in columns] for row in rows_raw]
         summary  = generate_contextual_answer(history, rows_raw)
@@ -325,42 +341,9 @@ def chat(request: ChatRequest):
             sql=content,
             data={"columns": columns, "rows": rows},
         )
-    except Exception as e:
+    except Exception:
         return ChatResponse(
-            summary=f"Sorry, I couldn't process that query: {e}",
+            summary="Sorry, I couldn't process that request. Please try again.",
             sql=None,
             data=None,
-        )
-
-
-# ── Legacy NL query endpoint (kept from API branch) ───────────────────────────
-
-# Apply a cache to remember the last 100 unique queries.
-# This saves LLM compute and database round-trips once the LLM is wired.
-@lru_cache(maxsize=100)
-def process_and_cache_query(user_prompt: str, property_id: int):
-    sql_query = generate_sql_from_text(user_prompt, property_id)
-
-    if not sql_query.strip().upper().startswith(("SELECT", "WITH")):
-        raise ValueError("Security block: Only SELECT queries are permitted.")
-
-    raw_results = fetch_all(sql_query, ())
-    final_answer = generate_natural_answer(user_prompt, raw_results)
-
-    return final_answer, sql_query
-
-
-@app.post("/api/query", response_model=QueryResponse)
-def process_revenue_query(request: QueryRequest):
-    """Legacy endpoint: process a natural language query and return SQL + answer."""
-    try:
-        final_answer, sql_query = process_and_cache_query(
-            request.user_prompt,
-            request.property_id,
-        )
-        return QueryResponse(answer=final_answer, generated_sql=sql_query)
-    except Exception as e:
-        return QueryResponse(
-            answer="An error occurred while processing the request.",
-            error=str(e),
         )

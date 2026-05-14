@@ -16,7 +16,7 @@ class QueryResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    query: str = Field(..., description="Natural language revenue question.")
+    query: str = Field(..., max_length=2000, description="Natural language revenue question.")
     property_id: int = Field(default=1)
     messages: list[dict[str, Any]] = Field(default_factory=list, description="Prior conversation history.")
 
