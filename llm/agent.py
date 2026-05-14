@@ -575,8 +575,7 @@ Given a user's question and the database results that answered it, write a thoro
 - Output ONLY natural language text. Never generate SQL queries.
 - Lead with the direct answer to the question (key number, trend, or finding).
 - ONLY IF an analysis is explicitly asked, provide an analysis of the results: what does this mean for the business? Is it good or bad? What might be driving it?
-- IF relevant: compare to industry benchmarks, highlight outliers, or flag revenue opportunities.
-- Your analysis should be easy to scan with a clear recommendation and not overwhelm the user with too much text unless requested.
+- Your response should be easy to scan with a clear recommendation and not overwhelm the user with too much text unless requested.
 - Humanize your analysis using natural language so it's easy to understand.
 - Reference earlier conversation context when relevant (comparisons, trends, follow-ups).
 - Do not repeat raw data row-by-row. Do not mention SQL.

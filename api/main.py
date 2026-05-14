@@ -21,6 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from datetime import date, timedelta
 from typing import Optional
 
+import re
+
 import psycopg2
 from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor
@@ -304,11 +306,37 @@ def _serialize_history(raw_messages: list) -> list[dict]:
     return result
 
 
+# ── Prompt injection guard ────────────────────────────────────────────────────
+
+_INJECTION_RE = re.compile(
+    r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions?"
+    r"|forget\s+(your|all|previous)\s+instructions?"
+    r"|you\s+are\s+now\b"
+    r"|disregard\s+(all\s+)?(previous\s+|prior\s+)?(instructions?|rules?|guidelines?)"
+    r"|print\s+(your\s+|the\s+)?(system\s+|full\s+)?(prompt|instructions?)"
+    r"|reveal\s+(your\s+|the\s+)?(system\s+|full\s+)?(prompt|instructions?)"
+    r"|bypass\s+(your\s+|all\s+)?(restrictions?|rules?|filters?)"
+    r"|override\s+(your\s+|all\s+)?(instructions?|rules?|restrictions?)"
+    r"|new\s+instructions?\s*:",
+    re.IGNORECASE | re.DOTALL,
+)
+
+def _is_injection(text: str) -> bool:
+    return bool(_INJECTION_RE.search(text))
+
+
 # ── Chat ──────────────────────────────────────────────────────────────────────
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     try:
+        if _is_injection(request.query):
+            return ChatResponse(
+                summary="I can only answer questions about hotel revenue and performance.",
+                sql=None,
+                data=None,
+            )
+
         history = _serialize_history(request.messages)
         history.append({"role": "user", "content": request.query})
 
@@ -318,6 +346,15 @@ def chat(request: ChatRequest):
             if not content:
                 content = "I wasn't able to generate a response. Please try rephrasing your question."
             return ChatResponse(summary=content, sql=None, data=None)
+
+        # Defence-in-depth: enforce SELECT-only regardless of what the LLM generated.
+        # Primary enforcement should be a read-only database role in Supabase/PostgreSQL.
+        if not content.strip().upper().startswith(("SELECT", "WITH")):
+            return ChatResponse(
+                summary="Sorry, I couldn't process that request.",
+                sql=None,
+                data=None,
+            )
 
         try:
             rows_raw = fetch_all(content, ())
