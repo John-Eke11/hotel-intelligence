@@ -1,4 +1,4 @@
-# ATLAS — Hotel Revenue Intelligence
+# Hermes — Hotel Revenue Intelligence
 
 AI-powered revenue management platform for independent hotels. Ask questions about your hotel's performance in plain English and get data-backed answers.
 
