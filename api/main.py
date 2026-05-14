@@ -100,7 +100,8 @@ def _kpis_for_period(from_d: date, to_d: date, property_id: int) -> dict:
     Basis: reservations with check_in_date within [from_d, to_d].
     TRevPAR includes event_bookings revenue (booked within the same window).
     """
-    days = max((to_d - from_d).days, 1)
+    to_d_excl = to_d + timedelta(days=1)
+    days = max((to_d_excl - from_d).days, 1)
 
     stay_sql = """
         SELECT
@@ -111,21 +112,24 @@ def _kpis_for_period(from_d: date, to_d: date, property_id: int) -> dict:
         FROM property p
         LEFT JOIN reservations r
                ON r.property_id = p.property_id
-              AND r.check_in_date BETWEEN %s AND %s
-              AND r.booking_status NOT IN ('cancelled', 'no_show')
+              AND r.check_in_date >= %s
+              AND r.check_in_date < %s
+              AND r.booking_status = 'checked_out'
         WHERE p.property_id = %s
         GROUP BY p.total_rooms
     """
-    row = fetch_one(stay_sql, (from_d, to_d, property_id))
+    row = fetch_one(stay_sql, (from_d, to_d_excl, property_id))
     if not row:
         return {}
 
     event_sql = """
         SELECT COALESCE(SUM(total_event_revenue), 0)::float AS event_revenue
         FROM event_bookings
-        WHERE property_id = %s AND booking_date BETWEEN %s AND %s
+        WHERE property_id = %s
+          AND booking_date >= %s
+          AND booking_date < %s
     """
-    event_row = fetch_one(event_sql, (property_id, from_d, to_d))
+    event_row = fetch_one(event_sql, (property_id, from_d, to_d_excl))
     event_rev = event_row["event_revenue"] if event_row else 0.0
 
     available   = row["total_rooms"] * days
@@ -174,17 +178,19 @@ def get_revenue_by_channel(
     to_date:     date = Query(...),
     property_id: int  = Query(default=1),
 ):
+    to_date_excl = to_date + timedelta(days=1)
     sql = """
         SELECT booking_channel AS channel,
                SUM(total_revenue)::float AS total_revenue
         FROM reservations
         WHERE property_id = %s
-          AND check_in_date BETWEEN %s AND %s
-          AND booking_status NOT IN ('cancelled', 'no_show')
+          AND check_in_date >= %s
+          AND check_in_date < %s
+          AND booking_status = 'checked_out'
         GROUP BY booking_channel
         ORDER BY total_revenue DESC
     """
-    return fetch_all(sql, (property_id, from_date, to_date))
+    return fetch_all(sql, (property_id, from_date, to_date_excl))
 
 
 # ── Revenue by segment ────────────────────────────────────────────────────────
@@ -195,17 +201,19 @@ def get_revenue_by_segment(
     to_date:     date = Query(...),
     property_id: int  = Query(default=1),
 ):
+    to_date_excl = to_date + timedelta(days=1)
     sql = """
         SELECT guest_segment AS segment,
                SUM(total_revenue)::float AS total_revenue
         FROM reservations
         WHERE property_id = %s
-          AND check_in_date BETWEEN %s AND %s
-          AND booking_status NOT IN ('cancelled', 'no_show')
+          AND check_in_date >= %s
+          AND check_in_date < %s
+          AND booking_status = 'checked_out'
         GROUP BY guest_segment
         ORDER BY total_revenue DESC
     """
-    return fetch_all(sql, (property_id, from_date, to_date))
+    return fetch_all(sql, (property_id, from_date, to_date_excl))
 
 
 # ── Monthly revenue vs budget ─────────────────────────────────────────────────
@@ -222,6 +230,7 @@ def get_monthly_trend(
     Budget target = target_occupancy * total_rooms * days_in_month * target_adr
                   + target_fnb_revenue + target_spa_revenue
     """
+    to_date_excl = to_date + timedelta(days=1)
     sql = """
         WITH actuals AS (
             SELECT
@@ -229,8 +238,9 @@ def get_monthly_trend(
                 SUM(total_revenue)::float                AS actual_revenue
             FROM reservations
             WHERE property_id = %s
-              AND check_in_date BETWEEN %s AND %s
-              AND booking_status NOT IN ('cancelled', 'no_show')
+              AND check_in_date >= %s
+              AND check_in_date < %s
+              AND booking_status = 'checked_out'
             GROUP BY DATE_TRUNC('month', check_in_date)::date
         ),
         targets AS (
@@ -255,7 +265,7 @@ def get_monthly_trend(
         LEFT JOIN targets t ON t.month = a.month
         ORDER BY a.month
     """
-    return fetch_all(sql, (property_id, from_date, to_date, property_id))
+    return fetch_all(sql, (property_id, from_date, to_date_excl, property_id))
 
 
 # ── Events calendar ───────────────────────────────────────────────────────────
